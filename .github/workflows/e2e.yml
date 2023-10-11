@@ -1,0 +1,56 @@
+name: "E2E Test based on Environment Selected"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        description: "Environment to run the test"
+        required: true
+        default: "testing1"
+        options:
+          - "testing"
+          - "staging"
+          - "production"
+
+jobs:
+  test:
+    name: E2E Test
+    runs-on: ubuntu-20.04
+    permissions:
+      id-token: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - ${{ inputs.environment }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.AWS_ACCOUNT_ROLE }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Fetch fixture from a S3 Bucket named fixturebucket
+        run: |
+          aws s3 cp s3://fixturebucket/${{ matrix.environment }}.json cypress/fixtures
+      - name: Fetch secrets from AWS SSM
+        run: |
+          export PASSWORD=$(aws ssm get-parameter --name "/cypress/env/${{ matrix.environment }}/PASSWORD" --with-decryption --query "Parameter.Value" --output text --region eas1)
+          export BASE_URL=$(aws ssm get-parameter --name "/cypress/env/${{ matrix.environment }}/BASE_URL" --with-decryption --query "Parameter.Value" --output text --region eas1)
+          echo "PASSWORD=$PASSWORD" >> $GITHUB_ENV
+          echo "BASE_URL=$BASE_URL" >> $GITHUB_ENV
+          echo "::add-mask::$PASSWORD"
+      - name: Cypress run
+        uses: cypress-io/github-action@v4
+        with:
+          record: true
+          spec: cypress/e2e/criticalpath.cy.js
+          config: baseUrl=${{ env.BASE_URL }}
+        env:
+          CYPRESS_PASSWORD: ${{ env.PASSWORD }}
+          CYPRESS_USER_MFA_SECRET: ${{ env.USER_MFA_SECRET }}
+          CYPRESS_ENVIRONMENT: ${{ matrix.environment }}
